@@ -3,7 +3,7 @@ import { Stage, Layer, Image as KonvaImage, Transformer, Rect, Line, Text } from
 import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
-import { Upload, Download, Trash2, Smartphone, ZoomIn, ZoomOut, AlertCircle, FileText, Maximize, Image as ImageIcon, Copy, Loader2 } from 'lucide-react';
+import { Upload, Download, Trash2, Smartphone, ZoomIn, ZoomOut, AlertCircle, FileText, Maximize, Image as ImageIcon, Copy, Loader2, Moon, Sun } from 'lucide-react';
 
 // 57cm x 100cm at 96 DPI
 const CM_TO_PX = 37.7952755906;
@@ -152,9 +152,13 @@ interface ImageItem {
   height: number;
   rotation: number;
   gabaritoId: string;
+  isLocked?: boolean;
+  isFlippedX?: boolean;
+  origWidth: number;
+  origHeight: number;
 }
 
-const URLImage = ({ image, isSelected, onSelect, onChange, onDragMove }: any) => {
+const URLImage = ({ image, isSelected, onSelect, onChange, onDragMove, scale, zoomLevel }: any) => {
   const [img] = useImage(image.url);
   const imageRef = useRef<any>(null);
   const trRef = useRef<any>(null);
@@ -175,13 +179,64 @@ const URLImage = ({ image, isSelected, onSelect, onChange, onDragMove }: any) =>
         width={image.width}
         height={image.height}
         rotation={image.rotation}
-        draggable
+        scaleX={image.isFlippedX ? -1 : 1}
+        offsetX={image.isFlippedX ? image.width : 0}
+        draggable={!image.isLocked}
         onClick={onSelect}
         onTap={onSelect}
         ref={imageRef}
         onDragMove={(e) => {
           if (onDragMove) {
-            onDragMove(image.id, e.target.x(), e.target.y());
+            const DISTANCE = 5; // Snapping threshold
+
+            // Find snapping points
+            const stage = e.target.getStage();
+            const images = stage.find('.image');
+            
+            const lineGuideStops = {
+              vertical: [0, VIRTUAL_WIDTH],
+              horizontal: [0, VIRTUAL_HEIGHT],
+            };
+
+            // Add other images to guide stops
+            images.forEach((otherImage: any) => {
+              if (otherImage === e.target) return;
+              const box = otherImage.getClientRect();
+              lineGuideStops.vertical.push(box.x / (scale * zoomLevel), (box.x + box.width) / (scale * zoomLevel));
+              lineGuideStops.horizontal.push(box.y / (scale * zoomLevel), (box.y + box.height) / (scale * zoomLevel));
+            });
+
+            let newX = e.target.x();
+            let newY = e.target.y();
+
+            // Snap Vertical
+            for (let stop of lineGuideStops.vertical) {
+              if (Math.abs(newX - stop) < DISTANCE) {
+                newX = stop;
+                break;
+              }
+              if (Math.abs((newX + image.width) - stop) < DISTANCE) {
+                newX = stop - image.width;
+                break;
+              }
+            }
+
+            // Snap Horizontal
+            for (let stop of lineGuideStops.horizontal) {
+              if (Math.abs(newY - stop) < DISTANCE) {
+                newY = stop;
+                break;
+              }
+              if (Math.abs((newY + image.height) - stop) < DISTANCE) {
+                newY = stop - image.height;
+                break;
+              }
+            }
+
+            e.target.x(newX);
+            e.target.y(newY);
+            
+            onDragMove(image.id, newX, newY);
           }
         }}
         onDragEnd={(e) => {
@@ -209,7 +264,7 @@ const URLImage = ({ image, isSelected, onSelect, onChange, onDragMove }: any) =>
           });
         }}
       />
-      {isSelected && (
+      {isSelected && !image.isLocked && (
         <Transformer
           ref={trRef}
           anchorSize={10}
@@ -232,7 +287,57 @@ const URLImage = ({ image, isSelected, onSelect, onChange, onDragMove }: any) =>
   );
 };
 
+const DimensionInput = ({ valueInCm, onChange, className }: { valueInCm: number, onChange: (val: number) => void, className?: string }) => {
+  const [localVal, setLocalVal] = useState(valueInCm.toFixed(2));
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    if (!isFocused) {
+      setLocalVal(valueInCm.toFixed(2));
+    }
+  }, [valueInCm, isFocused]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setLocalVal(e.target.value);
+    const num = parseFloat(e.target.value);
+    if (!isNaN(num) && num > 0) {
+      onChange(num);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur();
+    }
+  };
+
+  return (
+    <input 
+      type="number"
+      step="0.1"
+      value={localVal}
+      onChange={handleChange}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
+      onKeyDown={handleKeyDown}
+      onMouseDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      className={className || "w-16 text-center text-sm font-bold text-indigo-700 outline-none"}
+    />
+  );
+};
+
 export default function App() {
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
+
   const [images, setImages] = useState<ImageItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [scale, setScale] = useState(1);
@@ -250,9 +355,41 @@ export default function App() {
   const [gabaritos, setGabaritos] = useState<string[]>(['1']);
   const [activeGabaritoId, setActiveGabaritoId] = useState<string>('1');
   const [selectionRect, setSelectionRect] = useState({ x: 0, y: 0, width: 0, height: 0, visible: false });
+  
+  // History State
+  const [history, setHistory] = useState<ImageItem[][]>([]);
+  const [redoStack, setRedoStack] = useState<ImageItem[][]>([]);
+
+  const pushToHistory = useCallback((currentImages: ImageItem[]) => {
+    setHistory(prev => {
+      const newHistory = [...prev, currentImages];
+      if (newHistory.length > 50) return newHistory.slice(1);
+      return newHistory;
+    });
+    setRedoStack([]);
+  }, []);
+
+  const undo = useCallback(() => {
+    if (history.length === 0) return;
+    const previous = history[history.length - 1];
+    setRedoStack(prev => [...prev, images]);
+    setImages(previous);
+    setHistory(prev => prev.slice(0, -1));
+  }, [history, images]);
+
+  const redo = useCallback(() => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setHistory(prev => [...prev, images]);
+    setImages(next);
+    setRedoStack(prev => prev.slice(0, -1));
+  }, [redoStack, images]);
+
   const selectionStart = useRef({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRefs = useRef<Record<string, any>>({});
+
+
 
   const updateMeasurements = useCallback((targetId: string, targetX: number, targetY: number, currentImages: ImageItem[]) => {
     const targetImg = currentImages.find(img => img.id === targetId);
@@ -271,7 +408,6 @@ export default function App() {
     let closestH: any = null;
     let closestV: any = null;
 
-    // Check canvas edges
     const distLeft = currentRect.x;
     const distRight = VIRTUAL_WIDTH - (currentRect.x + currentRect.width);
     const distTop = currentRect.y;
@@ -316,7 +452,6 @@ export default function App() {
     currentImages.forEach(img => {
       if (img.id === targetId || img.gabaritoId !== targetImg.gabaritoId) return;
 
-      // Horizontal distance (requires vertical overlap)
       const overlapV = currentRect.y < img.y + img.height && currentRect.y + currentRect.height > img.y;
       if (overlapV) {
         let dist = -1;
@@ -342,7 +477,6 @@ export default function App() {
         }
       }
 
-      // Vertical distance (requires horizontal overlap)
       const overlapH = currentRect.x < img.x + img.width && currentRect.x + currentRect.width > img.x;
       if (overlapH) {
         let dist = -1;
@@ -453,7 +587,6 @@ export default function App() {
     const updateScale = () => {
       if (containerRef.current) {
         const { width, height } = containerRef.current.getBoundingClientRect();
-        // Add some padding
         const padding = 40;
         const scaleX = (width - padding) / VIRTUAL_WIDTH;
         const scaleY = (height - padding) / VIRTUAL_HEIGHT;
@@ -489,17 +622,31 @@ export default function App() {
       };
     });
     
-    setImages((prev) => [...prev, ...newImages]);
+    setImages((prev) => {
+      pushToHistory(prev);
+      return [...prev, ...newImages];
+    });
     setTimeout(() => setSelectedIds(newImages.map(img => img.id)), 0);
-  }, [selectedIds, images]);
+  }, [selectedIds, images, pushToHistory]);
 
-  // Keyboard delete and duplicate support
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        undo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedIds.length > 0) {
+          pushToHistory(images);
           setImages((prev) => prev.filter((img) => !selectedIds.includes(img.id)));
           setSelectedIds([]);
         }
@@ -509,10 +656,32 @@ export default function App() {
         e.preventDefault();
         handleDuplicate();
       }
+
+      if (selectedIds.length > 0 && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+        const anyLocked = images.some(img => selectedIds.includes(img.id) && img.isLocked);
+        if (anyLocked) return;
+
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        
+        setImages(prev => {
+          pushToHistory(prev);
+          return prev.map(img => {
+            if (selectedIds.includes(img.id)) {
+              return {
+                ...img,
+                x: e.key === 'ArrowLeft' ? img.x - step : e.key === 'ArrowRight' ? img.x + step : img.x,
+                y: e.key === 'ArrowUp' ? img.y - step : e.key === 'ArrowDown' ? img.y + step : img.y
+              };
+            }
+            return img;
+          });
+        });
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, handleDuplicate]);
+  }, [selectedIds, handleDuplicate, undo, redo, images, pushToHistory]);
 
   const handleWheel = useCallback((e: any) => {
     e.evt.preventDefault();
@@ -532,7 +701,6 @@ export default function App() {
         const img = new window.Image();
         img.src = croppedUrl;
         img.onload = () => {
-          // Calculate initial size to fit within 20cm x 20cm roughly
           const maxInitialSize = 20 * CM_TO_PX;
           let width = img.width;
           let height = img.height;
@@ -555,6 +723,10 @@ export default function App() {
               height,
               rotation: 0,
               gabaritoId: activeGabaritoId,
+              isLocked: false,
+              isFlippedX: false,
+              origWidth: img.width,
+              origHeight: img.height,
             },
           ]);
           setSelectedIds([newId]);
@@ -571,26 +743,20 @@ export default function App() {
     const targetSizePx = 9 * CM_TO_PX;
     const spacingPx = 1 * CM_TO_PX;
 
-    // Calculate scale to fit within 9x9cm while maintaining aspect ratio
     const imgScale = Math.min(targetSizePx / sourceImg.width, targetSizePx / sourceImg.height);
     const newWidth = sourceImg.width * imgScale;
     const newHeight = sourceImg.height * imgScale;
 
     const newImages: any[] = [];
-    
     let currentX = sourceImg.x;
     let currentY = sourceImg.y;
 
     for (let i = 0; i < logoQuantity; i++) {
       if (currentX + newWidth > VIRTUAL_WIDTH) {
-        currentX = 0; // Wrap to left edge
+        currentX = 0;
         currentY += newHeight + spacingPx;
       }
-
-      if (currentY + newHeight > VIRTUAL_HEIGHT) {
-        alert('Atenção: A quantidade excede o limite do gabarito.');
-        break;
-      }
+      if (currentY + newHeight > VIRTUAL_HEIGHT) break;
 
       newImages.push({
         ...sourceImg,
@@ -600,11 +766,11 @@ export default function App() {
         x: currentX,
         y: currentY
       });
-
       currentX += newWidth + spacingPx;
     }
 
     setImages((prev) => {
+      pushToHistory(prev);
       const filtered = prev.filter(img => img.id !== selectedIds[0]);
       return [...filtered, ...newImages];
     });
@@ -620,26 +786,20 @@ export default function App() {
     const targetHeightPx = largePrintHeight * CM_TO_PX;
     const spacingPx = 1 * CM_TO_PX;
 
-    // Calculate scale to fit within target dimensions while maintaining aspect ratio
     const imgScale = Math.min(targetWidthPx / sourceImg.width, targetHeightPx / sourceImg.height);
     const newWidth = sourceImg.width * imgScale;
     const newHeight = sourceImg.height * imgScale;
 
     const newImages: any[] = [];
-    
     let currentX = sourceImg.x;
     let currentY = sourceImg.y;
 
     for (let i = 0; i < largePrintQuantity; i++) {
       if (currentX + newWidth > VIRTUAL_WIDTH) {
-        currentX = 0; // Wrap to left edge
+        currentX = 0;
         currentY += newHeight + spacingPx;
       }
-
-      if (currentY + newHeight > VIRTUAL_HEIGHT) {
-        alert('Atenção: A quantidade excede o limite do gabarito.');
-        break;
-      }
+      if (currentY + newHeight > VIRTUAL_HEIGHT) break;
 
       newImages.push({
         ...sourceImg,
@@ -649,19 +809,90 @@ export default function App() {
         x: currentX,
         y: currentY
       });
-
       currentX += newWidth + spacingPx;
     }
 
     setImages((prev) => {
+      pushToHistory(prev);
       const filtered = prev.filter(img => img.id !== selectedIds[0]);
       return [...filtered, ...newImages];
     });
     setSelectedIds([]);
   };
 
+  const compactImages = () => {
+    pushToHistory(images);
+    const gabImages = images.filter(img => img.gabaritoId === activeGabaritoId);
+    const sorted = [...gabImages].sort((a, b) => b.height - a.height);
+    
+    let currentX = 0;
+    let currentY = 0;
+    let rowHeight = 0;
+    const gap = 0.5 * CM_TO_PX;
+
+    const updated = sorted.map(img => {
+      if (currentX + img.width > VIRTUAL_WIDTH) {
+        currentX = 0;
+        currentY += rowHeight + gap;
+        rowHeight = 0;
+      }
+      const x = currentX;
+      const y = currentY;
+      currentX += img.width + gap;
+      rowHeight = Math.max(rowHeight, img.height);
+      return { ...img, x, y };
+    });
+
+    setImages(prev => [...prev.filter(img => img.gabaritoId !== activeGabaritoId), ...updated]);
+  };
+
+  const handleSizeChange = useCallback((id: string, dimension: 'width' | 'height', valueInCm: number) => {
+    setImages(prev => {
+      pushToHistory(prev);
+      return prev.map(img => {
+        if (img.id === id) {
+          const newPx = valueInCm * CM_TO_PX;
+          const ratio = dimension === 'width' ? newPx / img.width : newPx / img.height;
+          return {
+            ...img,
+            width: dimension === 'width' ? newPx : img.width * ratio,
+            height: dimension === 'height' ? newPx : img.height * ratio
+          };
+        }
+        return img;
+      });
+    });
+  }, [pushToHistory]);
+
+  const handleRotate = useCallback((id: string, angleDelta: number) => {
+    setImages(prev => {
+      pushToHistory(prev);
+      return prev.map(img => {
+        if (img.id === id) {
+          const angleRad = img.rotation * Math.PI / 180;
+          const cos = Math.cos(angleRad);
+          const sin = Math.sin(angleRad);
+          const cx = img.x + (img.width/2) * cos - (img.height/2) * sin;
+          const cy = img.y + (img.width/2) * sin + (img.height/2) * cos;
+          
+          const newRot = (img.rotation + angleDelta) % 360;
+          const newRad = newRot * Math.PI / 180;
+          const nCos = Math.cos(newRad);
+          const nSin = Math.sin(newRad);
+          
+          const newX = cx - (img.width/2) * nCos + (img.height/2) * nSin;
+          const newY = cy - (img.width/2) * nSin - (img.height/2) * nCos;
+          
+          return { ...img, rotation: newRot, x: newX, y: newY };
+        }
+        return img;
+      });
+    });
+  }, [pushToHistory]);
+
   const handleDelete = () => {
     if (selectedIds.length > 0) {
+      pushToHistory(images);
       setImages((prev) => prev.filter((img) => !selectedIds.includes(img.id)));
       setSelectedIds([]);
     }
@@ -670,49 +901,33 @@ export default function App() {
   const downloadPNG = async () => {
     setIsExporting(true);
     setSelectedIds([]);
-    
     const safeFileName = `${customerName.trim()}_${orderName.trim()}`.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'pedido';
-    
     setTimeout(async () => {
       try {
         const currentScale = scale * zoomLevel;
-        // 300 DPI = 3.125x of 96 DPI (virtual resolution)
         const targetPixelRatio = 3.125 / currentScale;
-        
         for (let i = 0; i < gabaritos.length; i++) {
           const gabaritoId = gabaritos[i];
           const stage = stageRefs.current[gabaritoId];
           if (!stage) continue;
-
           let dataUrl;
           try {
-            dataUrl = stage.toDataURL({ 
-              pixelRatio: targetPixelRatio,
-              mimeType: 'image/png'
-            });
+            dataUrl = stage.toDataURL({ pixelRatio: targetPixelRatio, mimeType: 'image/png' });
             dataUrl = changeDpiDataUrl(dataUrl, 300);
           } catch (e) {
-            console.warn('Failed to export at 300 DPI, falling back to 200 DPI', e);
-            dataUrl = stage.toDataURL({ 
-              pixelRatio: 2.083 / currentScale, // 200 DPI
-              mimeType: 'image/png'
-            });
+            dataUrl = stage.toDataURL({ pixelRatio: 2.083 / currentScale, mimeType: 'image/png' });
             dataUrl = changeDpiDataUrl(dataUrl, 200);
           }
-          
           const link = document.createElement('a');
           link.download = `dtf_${safeFileName}_gabarito_${i + 1}.png`;
           link.href = dataUrl;
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
-
-          // Wait a bit to let the browser process the download and free memory
           await new Promise(resolve => setTimeout(resolve, 800));
         }
       } catch (error) {
         console.error('Error generating PNG:', error);
-        alert('Erro ao gerar PNG. Tente com menos imagens ou imagens menores.');
       } finally {
         setIsExporting(false);
       }
@@ -722,55 +937,30 @@ export default function App() {
   const generatePDF = async () => {
     setIsExporting(true);
     setSelectedIds([]);
-    
     const safeFileName = `${customerName.trim()}_${orderName.trim()}`.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'pedido';
-    
-    // Wait for state update and transformer to disappear
     setTimeout(async () => {
       try {
         const currentScale = scale * zoomLevel;
-        // 300 DPI = 3.125x of 96 DPI (virtual resolution)
         const targetPixelRatio = 3.125 / currentScale;
-        
         for (let i = 0; i < gabaritos.length; i++) {
           const gabaritoId = gabaritos[i];
           const stage = stageRefs.current[gabaritoId];
           if (!stage) continue;
-
           let dataUrl;
           try {
-            // Try high-res data URL (300 DPI)
-            dataUrl = stage.toDataURL({ 
-              pixelRatio: targetPixelRatio,
-              mimeType: 'image/png'
-            });
+            dataUrl = stage.toDataURL({ pixelRatio: targetPixelRatio, mimeType: 'image/png' });
             dataUrl = changeDpiDataUrl(dataUrl, 300);
           } catch (e) {
-            console.warn('Failed to export at 300 DPI, falling back to 200 DPI', e);
-            dataUrl = stage.toDataURL({ 
-              pixelRatio: 2.083 / currentScale, // 200 DPI
-              mimeType: 'image/png'
-            });
+            dataUrl = stage.toDataURL({ pixelRatio: 2.083 / currentScale, mimeType: 'image/png' });
             dataUrl = changeDpiDataUrl(dataUrl, 200);
           }
-          
-          // 570mm x 1000mm
-          const pdf = new jsPDF({
-            orientation: 'portrait',
-            unit: 'mm',
-            format: [570, 1000]
-          });
-
-          // Use FAST compression to prevent color corruption in some PDF readers
+          const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [570, 1000] });
           pdf.addImage(dataUrl, 'PNG', 0, 0, 570, 1000, undefined, 'FAST');
           pdf.save(`dtf_${safeFileName}_gabarito_${i + 1}.pdf`);
-
-          // Wait a bit to let the browser process the download and free memory
           await new Promise(resolve => setTimeout(resolve, 800));
         }
       } catch (error) {
         console.error('Error generating PDF:', error);
-        alert('Erro ao gerar PDF. Tente com menos imagens ou imagens menores.');
       } finally {
         setIsExporting(false);
       }
@@ -786,19 +976,49 @@ export default function App() {
   const canExport = images.length > 0 && isFormValid && !isExporting;
 
   return (
-    <div className="flex h-screen bg-gray-50 font-sans">
-      {/* Sidebar */}
-      <div className="w-80 bg-white shadow-lg flex flex-col z-10">
-        <div className="p-6 border-b border-gray-100 flex items-center gap-4">
-          <img src="https://i.ibb.co/ymB6hsrs/Camada-1.png" alt="Studio DTF MTS Logo" className="w-20 h-20 object-contain rounded-md" />
-          <div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight leading-tight">Studio DTF MTS</h1>
-            <p className="text-sm text-gray-500 mt-1">Gabarito 57x100 cm</p>
+    <div className="flex h-screen bg-gray-50 font-sans transition-colors duration-200">
+      <div className="w-80 bg-white shadow-lg flex flex-col z-10 transition-colors duration-200">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <img src="https://i.ibb.co/ymB6hsrs/Camada-1.png" alt="Studio DTF MTS Logo" className="w-16 h-16 object-contain rounded-md" />
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 tracking-tight leading-tight">Studio DTF MTS</h1>
+              <p className="text-sm text-gray-500 mt-1">Gabarito 57x100 cm</p>
+            </div>
           </div>
+          <button 
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            className="p-2 rounded-full hover:bg-gray-100 text-gray-500 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 shrink-0"
+            title={isDarkMode ? "Modo Claro" : "Modo Escuro"}
+          >
+            {isDarkMode ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-indigo-500" />}
+          </button>
         </div>
 
+          {/* Background Color */}
+          <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg mx-4 mt-4">
+            <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider mb-2">Fundo (Visualização)</h2>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setBgColor('transparent')}
+                className={`flex-1 h-10 rounded-lg border-2 ${bgColor === 'transparent' ? 'border-indigo-500' : 'border-gray-200'} checkerboard`}
+                title="Transparente"
+              />
+              <button
+                onClick={() => setBgColor('white')}
+                className={`flex-1 h-10 rounded-lg border-2 bg-white ${bgColor === 'white' ? 'border-indigo-500' : 'border-gray-200'}`}
+                title="Branco"
+              />
+              <button
+                onClick={() => setBgColor('black')}
+                className={`flex-1 h-10 rounded-lg border-2 bg-black ${bgColor === 'black' ? 'border-indigo-500' : 'border-gray-200'}`}
+                title="Preto"
+              />
+            </div>
+            <p className="text-[10px] text-gray-400 mt-2 italic">Apenas visual. O PDF sempre terá fundo.</p>
+          </div>
+
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Gabaritos Section */}
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Gabaritos</h2>
@@ -834,7 +1054,6 @@ export default function App() {
                         if (activeGabaritoId === gabId) {
                           setActiveGabaritoId(newGabaritos[0]);
                         }
-                        // Also remove images from this gabarito
                         setImages((prev) => prev.filter(img => img.gabaritoId !== gabId));
                       }}
                       className={`px-2 py-1.5 text-sm font-medium rounded-r-md border border-l-0 ${
@@ -852,225 +1071,142 @@ export default function App() {
             </div>
           </div>
 
-          {/* Upload Section */}
           <div className="space-y-3 pt-4 border-t border-gray-100">
             <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Adicionar Imagens</h2>
-            <p className="text-xs text-gray-500">As imagens serão adicionadas ao Gabarito {gabaritos.indexOf(activeGabaritoId) + 1}</p>
             <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-indigo-300 rounded-xl cursor-pointer bg-indigo-50 hover:bg-indigo-100 transition-colors">
               <div className="flex flex-col items-center justify-center pt-5 pb-6">
                 <Upload className="w-8 h-8 text-indigo-500 mb-2" />
                 <p className="text-sm text-indigo-600 font-medium">Clique para enviar</p>
-                <p className="text-xs text-indigo-400 mt-1">PNG transparente recomendado</p>
               </div>
               <input type="file" className="hidden" multiple accept="image/png, image/jpeg" onChange={handleFileUpload} />
             </label>
           </div>
 
-          {/* Tools */}
           <div className="space-y-3 pt-4 border-t border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Ferramentas</h2>
-            
-            {/* Dimensions */}
-            {selectedIds.length === 1 && images.find(img => img.id === selectedIds[0]) && (
-              <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Tamanho na Impressão</p>
-                <div className="flex justify-between text-sm font-medium text-gray-900">
-                  <span>L: {(images.find(img => img.id === selectedIds[0])!.width / CM_TO_PX).toFixed(1)} cm</span>
-                  <span>A: {(images.find(img => img.id === selectedIds[0])!.height / CM_TO_PX).toFixed(1)} cm</span>
-                </div>
-              </div>
-            )}
+            <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Dados do Pedido</h2>
+            <input type="text" placeholder="Nome do Cliente" value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+            <input type="text" placeholder="WhatsApp" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+            <input type="text" placeholder="Nome do Pedido" value={orderName} onChange={(e) => setOrderName(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+          </div>
+        </div>
 
-            {/* Logo Peito Tool */}
-            {selectedIds.length === 1 && images.find(img => img.id === selectedIds[0]) && (
-              <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 space-y-3">
-                <div>
-                  <p className="text-sm font-semibold text-indigo-900">Logo Peito (9x9 cm)</p>
-                  <p className="text-xs text-indigo-700 mt-0.5">Redimensiona e duplica com 1cm de espaço.</p>
+        <div className="p-6 border-t border-gray-100 space-y-3 bg-gray-50">
+          <button onClick={downloadPNG} disabled={!canExport} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 font-medium">
+            <ImageIcon className="w-5 h-5" /> Baixar PNG
+          </button>
+          <button onClick={generatePDF} disabled={!canExport} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white border-2 border-indigo-600 text-indigo-600 rounded-xl hover:bg-indigo-50 disabled:opacity-50 font-medium">
+            <FileText className="w-5 h-5" /> Gerar PDF
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 relative flex flex-col overflow-hidden bg-gray-200">
+        <div className="bg-white border-b border-gray-200 p-3 shadow-sm z-10 flex-shrink-0 min-h-[60px]">
+          {selectedIds.length === 1 && images.find(img => img.id === selectedIds[0]) ? (() => {
+            const selectedImg = images.find(img => img.id === selectedIds[0])!;
+            return (
+              <div className="flex items-center gap-6 overflow-x-auto pb-1 text-sm h-full max-w-full">
+                {/* Dimensions */}
+                <div className="flex items-center gap-3 border-r border-gray-200 pr-6 shrink-0">
+                  <span className="text-xs font-semibold text-gray-500 uppercase">Tamanho</span>
+                  <div className="flex gap-2">
+                    <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded px-2 py-1 focus-within:ring-1 focus-within:ring-indigo-500 focus-within:border-indigo-500">
+                      <span className="text-gray-500 text-xs font-bold">L:</span>
+                      <DimensionInput 
+                        valueInCm={selectedImg.width / CM_TO_PX} 
+                        onChange={(val) => handleSizeChange(selectedImg.id, 'width', val)} 
+                        className="w-14 text-right text-sm font-bold outline-none bg-transparent"
+                      />
+                      <span className="text-gray-500 text-xs font-medium">cm</span>
+                    </div>
+                    <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded px-2 py-1 focus-within:ring-1 focus-within:ring-indigo-500 focus-within:border-indigo-500">
+                      <span className="text-gray-500 text-xs font-bold">A:</span>
+                      <DimensionInput 
+                        valueInCm={selectedImg.height / CM_TO_PX} 
+                        onChange={(val) => handleSizeChange(selectedImg.id, 'height', val)} 
+                        className="w-14 text-right text-sm font-bold outline-none bg-transparent"
+                      />
+                      <span className="text-gray-500 text-xs font-medium">cm</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
+
+                {/* Rotation */}
+                <div className="flex items-center gap-3 border-r border-gray-200 pr-6 shrink-0">
+                  <span className="text-xs font-semibold text-gray-500 uppercase">Rotação</span>
+                  <div className="flex bg-gray-100 rounded-md p-0.5 shadow-inner">
+                    <button onClick={() => handleRotate(selectedIds[0], -90)} className="px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-white hover:shadow-sm hover:text-indigo-600 rounded transition-all" title="Girar 90° Anti-horário">
+                      -90°
+                    </button>
+                    <button onClick={() => handleRotate(selectedIds[0], 90)} className="px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-white hover:shadow-sm hover:text-indigo-600 rounded transition-all" title="Girar 90° Horário">
+                      +90°
+                    </button>
+                    <button onClick={() => handleRotate(selectedIds[0], 180)} className="px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-white hover:shadow-sm hover:text-indigo-600 rounded transition-all" title="Girar 180°">
+                      180°
+                    </button>
+                  </div>
+                </div>
+
+                {/* Logo Peito (9x9) */}
+                <div className="flex items-center gap-2 border-r border-gray-200 pr-6 shrink-0">
+                  <span className="text-xs font-semibold text-indigo-900 uppercase">Logo Peito (9x9)</span>
                   <input
                     type="number"
                     min="1"
                     value={logoQuantity}
                     onChange={(e) => setLogoQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-20 px-2 py-1.5 text-sm border border-indigo-200 rounded-md focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                    placeholder="Qtd"
+                    className="w-12 px-1.5 py-1 text-xs border border-indigo-200 rounded focus:ring-1 focus:ring-indigo-500 outline-none"
+                    title="Quantidade"
                   />
                   <button
                     onClick={applyLogoPeito}
-                    className="flex-1 bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-indigo-700 transition-colors"
+                    className="bg-indigo-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-indigo-700 transition-colors shadow-sm"
                   >
                     Aplicar
                   </button>
                 </div>
-              </div>
-            )}
 
-            {/* Estampa Grande Tool */}
-            {selectedIds.length === 1 && images.find(img => img.id === selectedIds[0]) && (
-              <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100 space-y-3">
-                <div>
-                  <p className="text-sm font-semibold text-emerald-900">Estampa Grande</p>
-                  <p className="text-xs text-emerald-700 mt-0.5">Defina o tamanho máximo (cm) e a quantidade.</p>
+                {/* Estampa Grande */}
+                <div className="flex items-center gap-2 border-r border-gray-200 pr-6 shrink-0">
+                  <span className="text-xs font-semibold text-emerald-900 uppercase">Estampa</span>
+                  <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded px-1 py-1">
+                    <span className="text-[10px] text-gray-500 ml-1">L:</span>
+                    <input type="number" min="1" value={largePrintWidth} onChange={(e) => setLargePrintWidth(Math.max(1, parseInt(e.target.value) || 1))} className="w-9 px-1 py-0.5 text-[10px] text-center border border-emerald-200 bg-white rounded focus:ring-1 focus:ring-emerald-500 outline-none" title="Largura (cm)" />
+                    <span className="text-[10px] text-gray-500">A:</span>
+                    <input type="number" min="1" value={largePrintHeight} onChange={(e) => setLargePrintHeight(Math.max(1, parseInt(e.target.value) || 1))} className="w-9 px-1 py-0.5 text-[10px] text-center border border-emerald-200 bg-white rounded focus:ring-1 focus:ring-emerald-500 outline-none" title="Altura (cm)" />
+                    <span className="text-[10px] text-gray-500 ml-1">Qtd:</span>
+                    <input type="number" min="1" value={largePrintQuantity} onChange={(e) => setLargePrintQuantity(Math.max(1, parseInt(e.target.value) || 1))} className="w-9 px-1 py-0.5 text-[10px] text-center border border-emerald-200 bg-white rounded focus:ring-1 focus:ring-emerald-500 outline-none" title="Quantidade" />
+                  </div>
+                  <button onClick={applyLargePrint} className="bg-emerald-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-emerald-700 transition-colors shadow-sm">
+                    Aplicar
+                  </button>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="flex flex-col gap-1 w-16">
-                    <label className="text-[10px] font-medium text-emerald-800 uppercase">Larg.</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={largePrintWidth}
-                      onChange={(e) => setLargePrintWidth(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full px-2 py-1.5 text-sm border border-emerald-200 rounded-md focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1 w-16">
-                    <label className="text-[10px] font-medium text-emerald-800 uppercase">Alt.</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={largePrintHeight}
-                      onChange={(e) => setLargePrintHeight(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full px-2 py-1.5 text-sm border border-emerald-200 rounded-md focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1 w-16">
-                    <label className="text-[10px] font-medium text-emerald-800 uppercase">Qtd.</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={largePrintQuantity}
-                      onChange={(e) => setLargePrintQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full px-2 py-1.5 text-sm border border-emerald-200 rounded-md focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                    />
-                  </div>
-                </div>
+
+                {/* Compact Button */}
                 <button
-                  onClick={applyLargePrint}
-                  className="w-full bg-emerald-600 text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors"
+                  onClick={compactImages}
+                  className="px-3 bg-gray-100 text-gray-700 py-2 rounded-md hover:bg-gray-200 transition-colors text-xs font-bold border border-gray-300 shadow-sm flex items-center gap-1.5 shrink-0"
+                  title="Otimizar encaixe das imagens no topo"
                 >
-                  Aplicar Estampa
+                  <span className="text-base">🧩</span> Compactar
+                </button>
+
+                {/* Delete */}
+                <button
+                  onClick={handleDelete}
+                  className="ml-auto flex items-center gap-1.5 px-3 py-2 bg-red-50 text-red-600 rounded hover:bg-red-100 transition-colors text-xs font-medium shrink-0 shadow-sm"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Remover
                 </button>
               </div>
-            )}
-
-            <button
-              onClick={handleDelete}
-              disabled={selectedIds.length === 0}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
-            >
-              <Trash2 className="w-4 h-4" />
-              Remover Imagem Selecionada
-            </button>
-            <p className="text-xs text-center text-gray-400">Você também pode usar a tecla Delete</p>
-          </div>
-
-          {/* Background Color */}
-          <div className="space-y-3 pt-4 border-t border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Fundo (Visualização)</h2>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setBgColor('transparent')}
-                className={`flex-1 h-10 rounded-lg border-2 ${bgColor === 'transparent' ? 'border-indigo-500' : 'border-gray-200'} checkerboard`}
-                title="Transparente"
-              />
-              <button
-                onClick={() => setBgColor('white')}
-                className={`flex-1 h-10 rounded-lg border-2 bg-white ${bgColor === 'white' ? 'border-indigo-500' : 'border-gray-200'}`}
-                title="Branco"
-              />
-              <button
-                onClick={() => setBgColor('black')}
-                className={`flex-1 h-10 rounded-lg border-2 bg-black ${bgColor === 'black' ? 'border-indigo-500' : 'border-gray-200'}`}
-                title="Preto"
-              />
+            );
+          })() : (
+            <div className="flex items-center h-full text-sm text-gray-500 font-medium">
+              <span className="bg-indigo-50 text-indigo-600 px-2 py-1 rounded text-xs mr-2 border border-indigo-100">Dica:</span> Selecione uma imagem no gabarito para ver as ferramentas de edição e automação.
             </div>
-            <p className="text-xs text-gray-500">Apenas visual. O PDF sempre terá fundo transparente.</p>
-          </div>
-
-          {/* Customer Data Form */}
-          <div className="space-y-3 pt-4 border-t border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Dados do Pedido <span className="text-red-500">*</span></h2>
-            <input
-              type="text"
-              placeholder="Nome do Cliente"
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <input
-              type="text"
-              placeholder="Número do WhatsApp"
-              value={customerPhone}
-              onChange={(e) => setCustomerPhone(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <input
-              type="text"
-              placeholder="Nome do Pedido (Ex: Camisetas Evento)"
-              value={orderName}
-              onChange={(e) => setOrderName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            {!isFormValid && images.length > 0 && (
-              <p className="text-xs text-red-500 font-medium">Preencha os dados acima para liberar o download.</p>
-            )}
-          </div>
-
-          {/* Info */}
-          <div className="bg-blue-50 p-4 rounded-xl flex gap-3 items-start">
-            <AlertCircle className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" />
-            <div className="text-sm text-blue-800">
-              <p className="font-medium mb-1">Dicas para melhor qualidade:</p>
-              <ul className="list-disc pl-4 space-y-1 text-blue-700/80">
-                <li>Use imagens PNG com fundo transparente.</li>
-                <li>Evite esticar imagens pequenas demais.</li>
-                <li>O fundo quadriculado não sairá na impressão.</li>
-              </ul>
-            </div>
-          </div>
+          )}
         </div>
-
-        {/* Actions */}
-        <div className="p-6 border-t border-gray-100 space-y-3 bg-gray-50">
-          <button
-            onClick={downloadPNG}
-            disabled={!canExport}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium shadow-sm"
-          >
-            {isExporting ? (
-              <span className="animate-pulse">Gerando...</span>
-            ) : (
-              <>
-                <ImageIcon className="w-5 h-5" />
-                Baixar PNG (Recomendado)
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={generatePDF}
-            disabled={!canExport}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white border-2 border-indigo-600 text-indigo-600 rounded-xl hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium shadow-sm"
-          >
-            <FileText className="w-5 h-5" />
-            Gerar PDF
-          </button>
-          
-          <button
-            onClick={sendToWhatsApp}
-            disabled={!canExport}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#25D366] text-white rounded-xl hover:bg-[#20bd5a] disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium shadow-sm"
-          >
-            <Smartphone className="w-5 h-5" />
-            Enviar para WhatsApp
-          </button>
-        </div>
-      </div>
-
-      {/* Canvas Area */}
-      <div className="flex-1 relative flex flex-col overflow-hidden bg-gray-200">
         <div className="flex-1 overflow-auto" ref={containerRef}>
           <div className="min-h-full min-w-max flex flex-row items-start justify-start p-8 gap-8">
             {gabaritos.map((gabId, index) => {
@@ -1085,19 +1221,141 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <div 
-                    onClick={() => setActiveGabaritoId(gabId)}
-                    className={`shadow-2xl transition-all cursor-pointer ${
-                      activeGabaritoId === gabId ? 'ring-4 ring-indigo-500' : 'ring-1 ring-gray-900/5 hover:ring-2 hover:ring-indigo-300'
-                    } ${
-                      bgColor === 'transparent' ? 'checkerboard' :
-                      bgColor === 'black' ? 'bg-black' : 'bg-white'
-                    }`}
-                    style={{
-                      width: VIRTUAL_WIDTH * scale * zoomLevel,
-                      height: VIRTUAL_HEIGHT * scale * zoomLevel,
-                    }}
-                  >
+                  <div className="relative flex">
+                    <div 
+                      onClick={() => setActiveGabaritoId(gabId)}
+                      className={`relative shadow-2xl transition-all cursor-pointer ${
+                        activeGabaritoId === gabId ? 'ring-4 ring-indigo-500' : 'ring-1 ring-gray-900/5 hover:ring-2 hover:ring-indigo-300'
+                      } ${
+                        bgColor === 'transparent' ? 'checkerboard' :
+                        bgColor === 'black' ? 'bg-black' : 'canvas-bg-white'
+                      }`}
+                      style={{
+                        width: VIRTUAL_WIDTH * scale * zoomLevel,
+                        height: VIRTUAL_HEIGHT * scale * zoomLevel,
+                      }}
+                    >
+                    {/* Floating Inputs for Selected Image */}
+                    {activeGabaritoId === gabId && selectedIds.length === 1 && (() => {
+                      const selectedImg = images.find(img => img.id === selectedIds[0]);
+                      if (!selectedImg || selectedImg.gabaritoId !== gabId) return null;
+                      
+                      const currentScale = scale * zoomLevel;
+                      
+                      const angleRad = selectedImg.rotation * Math.PI / 180;
+                      const cos = Math.cos(angleRad);
+                      const sin = Math.sin(angleRad);
+                      const pts = [
+                        { x: 0, y: 0 },
+                        { x: selectedImg.width, y: 0 },
+                        { x: selectedImg.width, y: selectedImg.height },
+                        { x: 0, y: selectedImg.height }
+                      ].map(p => ({
+                        x: selectedImg.x + p.x * cos - p.y * sin,
+                        y: selectedImg.y + p.x * sin + p.y * cos
+                      }));
+                      
+                      const minX = Math.min(...pts.map(p => p.x));
+                      const maxX = Math.max(...pts.map(p => p.x));
+                      const minY = Math.min(...pts.map(p => p.y));
+                      const maxY = Math.max(...pts.map(p => p.y));
+
+                      const boxX = minX * currentScale;
+                      const boxY = minY * currentScale;
+                      const boxW = (maxX - minX) * currentScale;
+                      const boxH = (maxY - minY) * currentScale;
+
+                      return (
+                        <>
+                          {/* Top Controls (Width & Rotation) */}
+                          <div 
+                            className="absolute flex items-center gap-2 z-50 pointer-events-none"
+                            style={{
+                              left: boxX + boxW / 2,
+                              top: boxY - 45,
+                              transform: 'translateX(-50%)'
+                            }}
+                          >
+                            {/* Width Input */}
+                            <div className="flex items-center justify-center bg-white shadow-lg rounded px-2 py-1.5 border border-indigo-500 pointer-events-auto">
+                              <span className="text-xs font-bold text-gray-500 mr-1">L:</span>
+                              <DimensionInput 
+                                valueInCm={selectedImg.width / CM_TO_PX}
+                                onChange={(val) => handleSizeChange(selectedImg.id, 'width', val)}
+                                className="w-16 text-center text-sm font-bold text-indigo-700 outline-none"
+                              />
+                              <span className="text-xs font-medium text-indigo-500 ml-1">cm</span>
+                            </div>
+
+                            {/* Rotation Menu */}
+                            <div className="flex items-stretch bg-white shadow-lg rounded border border-indigo-500 divide-x divide-indigo-200 overflow-hidden pointer-events-auto">
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleRotate(selectedImg.id, -90); }}
+                                className="px-2 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-50 transition-colors"
+                                title="Girar 90° Anti-horário"
+                              >
+                                -90°
+                              </button>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleRotate(selectedImg.id, 90); }}
+                                className="px-2 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-50 transition-colors"
+                                title="Girar 90° Horário"
+                              >
+                                +90°
+                              </button>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleRotate(selectedImg.id, 180); }}
+                                className="px-2 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-50 transition-colors"
+                                title="Girar 180°"
+                              >
+                                180°
+                              </button>
+                              
+                              {/* New Tools: Lock and Flip */}
+                              <button 
+                                onClick={(e) => { 
+                                  e.stopPropagation(); 
+                                  setImages(prev => prev.map(img => img.id === selectedImg.id ? { ...img, isFlippedX: !img.isFlippedX } : img));
+                                }}
+                                className={`px-2 py-1.5 text-xs font-bold ${selectedImg.isFlippedX ? 'bg-indigo-600 text-white' : 'text-indigo-700 hover:bg-indigo-50'} transition-colors`}
+                                title="Espelhar Horizontalmente"
+                              >
+                                <span className={selectedImg.isFlippedX ? "" : "transform scale-x-[-1] inline-block"}>↔</span>
+                              </button>
+                              
+                              <button 
+                                onClick={(e) => { 
+                                  e.stopPropagation(); 
+                                  setImages(prev => prev.map(img => img.id === selectedImg.id ? { ...img, isLocked: !img.isLocked } : img));
+                                }}
+                                className={`px-2 py-1.5 text-xs font-bold ${selectedImg.isLocked ? 'bg-red-600 text-white' : 'text-indigo-700 hover:bg-indigo-50'} transition-colors`}
+                                title={selectedImg.isLocked ? "Desbloquear" : "Bloquear Posição"}
+                              >
+                                {selectedImg.isLocked ? "🔒" : "🔓"}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Height Input (Right) */}
+                          <div 
+                            className="absolute flex items-center justify-center bg-white shadow-lg rounded px-2 py-1.5 border border-indigo-500 z-50 pointer-events-auto"
+                            style={{
+                              left: boxX + boxW + 15,
+                              top: boxY + boxH / 2,
+                              transform: 'translateY(-50%)'
+                            }}
+                          >
+                            <span className="text-xs font-bold text-gray-500 mr-1">A:</span>
+                            <DimensionInput 
+                              valueInCm={selectedImg.height / CM_TO_PX}
+                              onChange={(val) => handleSizeChange(selectedImg.id, 'height', val)}
+                              className="w-16 text-center text-sm font-bold text-indigo-700 outline-none"
+                            />
+                            <span className="text-xs font-medium text-indigo-500 ml-1">cm</span>
+                          </div>
+                        </>
+                      );
+                    })()}
                     <Stage
                       width={VIRTUAL_WIDTH * scale * zoomLevel}
                       height={VIRTUAL_HEIGHT * scale * zoomLevel}
@@ -1113,37 +1371,71 @@ export default function App() {
                       ref={(node) => { stageRefs.current[gabId] = node; }}
                     >
                       <Layer>
+                        {/* Safety Margin (1cm) */}
+                        {!isExporting && (
+                          <Rect
+                            x={1 * CM_TO_PX}
+                            y={1 * CM_TO_PX}
+                            width={VIRTUAL_WIDTH - 2 * CM_TO_PX}
+                            height={VIRTUAL_HEIGHT - 2 * CM_TO_PX}
+                            stroke="#ff9999"
+                            strokeWidth={1}
+                            dash={[10, 5]}
+                            opacity={0.5}
+                            listening={false}
+                          />
+                        )}
+
                         {gabaritoImages.map((img) => {
                           const originalIndex = images.findIndex(i => i.id === img.id);
+                          
+                          // DPI Calculation
+                          const currentDpi = Math.round((img.origWidth * 2.54) / (img.width / CM_TO_PX));
+                          const isLowQuality = currentDpi < 250;
+
                           return (
-                            <URLImage
-                              key={img.id}
-                              image={img}
-                              isSelected={selectedIds.includes(img.id)}
-                              onSelect={(e: any) => {
-                                setActiveGabaritoId(gabId);
-                                const metaPressed = e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey;
-                                if (metaPressed) {
-                                  if (selectedIds.includes(img.id)) {
-                                    setSelectedIds(selectedIds.filter(id => id !== img.id));
+                            <React.Fragment key={img.id}>
+                              <URLImage
+                                image={img}
+                                isSelected={selectedIds.includes(img.id)}
+                                scale={scale}
+                                zoomLevel={zoomLevel}
+                                onSelect={(e: any) => {
+                                  setActiveGabaritoId(gabId);
+                                  const metaPressed = e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey;
+                                  if (metaPressed) {
+                                    if (selectedIds.includes(img.id)) {
+                                      setSelectedIds(selectedIds.filter(id => id !== img.id));
+                                    } else {
+                                      setSelectedIds([...selectedIds, img.id]);
+                                    }
                                   } else {
-                                    setSelectedIds([...selectedIds, img.id]);
+                                    setSelectedIds([img.id]);
                                   }
-                                } else {
-                                  setSelectedIds([img.id]);
-                                }
-                              }}
-                              onChange={(newAttrs: any) => {
-                                setImages((prev) => {
-                                  const imgs = prev.slice();
-                                  imgs[originalIndex] = newAttrs;
-                                  return imgs;
-                                });
-                              }}
-                              onDragMove={(id: string, x: number, y: number) => {
-                                updateMeasurements(id, x, y, images);
-                              }}
-                            />
+                                }}
+                                onChange={(newAttrs: any) => {
+                                  setImages((prev) => {
+                                    pushToHistory(prev);
+                                    const imgs = prev.slice();
+                                    imgs[originalIndex] = newAttrs;
+                                    return imgs;
+                                  });
+                                }}
+                                onDragMove={(id: string, x: number, y: number) => {
+                                  updateMeasurements(id, x, y, images);
+                                }}
+                              />
+                              {isLowQuality && !isExporting && (
+                                <Text
+                                  x={img.x}
+                                  y={img.y - 20}
+                                  text={`⚠️ ${currentDpi} DPI`}
+                                  fontSize={14}
+                                  fill="#ef4444"
+                                  fontStyle="bold"
+                                />
+                              )}
+                            </React.Fragment>
                           );
                         })}
                         
@@ -1185,6 +1477,27 @@ export default function App() {
                       </Layer>
                     </Stage>
                   </div>
+
+                  {/* Floating Action Buttons per Gabarito */}
+                  {activeGabaritoId === gabId && selectedIds.length > 0 && (
+                    <div className="absolute top-4 -right-16 flex flex-col gap-3 z-50">
+                      <button
+                        onClick={handleDuplicate}
+                        className="bg-blue-500 text-white p-3 rounded-full shadow-lg hover:bg-blue-600 transition-colors"
+                        title="Duplicar Imagem (Ctrl+D)"
+                      >
+                        <Copy className="w-5 h-5 pointer-events-none" />
+                      </button>
+                      <button
+                        onClick={handleDelete}
+                        className="bg-red-500 text-white p-3 rounded-full shadow-lg hover:bg-red-600 transition-colors"
+                        title="Excluir Imagem (Delete)"
+                      >
+                        <Trash2 className="w-5 h-5 pointer-events-none" />
+                      </button>
+                    </div>
+                  )}
+                  </div>
                 </div>
               );
             })}
@@ -1208,25 +1521,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* Floating Action Buttons */}
-        {selectedIds.length > 0 && (
-          <div className="absolute top-4 right-4 flex gap-2 z-10">
-            <button
-              onClick={handleDuplicate}
-              className="bg-blue-500 text-white p-3 rounded-full shadow-lg hover:bg-blue-600 transition-colors"
-              title="Duplicar Imagem (Ctrl+D)"
-            >
-              <Copy className="w-6 h-6" />
-            </button>
-            <button
-              onClick={handleDelete}
-              className="bg-red-500 text-white p-3 rounded-full shadow-lg hover:bg-red-600 transition-colors"
-              title="Excluir Imagem (Delete)"
-            >
-              <Trash2 className="w-6 h-6" />
-            </button>
-          </div>
-        )}
 
         {/* Exporting Balloon */}
         {isExporting && (

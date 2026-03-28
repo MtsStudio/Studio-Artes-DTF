@@ -1,5 +1,48 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+    --color-white: #111827; /* gray-900 */
+    --color-gray-50: #1f2937; /* gray-800 */
+    --color-gray-100: #374151; /* gray-700 */
+    --color-gray-200: #4b5563; /* gray-600 */
+    --color-gray-300: #4b5563; /* gray-600 */
+    --color-gray-400: #6b7280; /* gray-500 */
+    --color-gray-500: #9ca3af; /* gray-400 */
+    --color-gray-600: #d1d5db; /* gray-300 */
+    --color-gray-700: #e5e7eb; /* gray-200 */
+    --color-gray-800: #f3f4f6; /* gray-100 */
+    --color-gray-900: #f9fafb; /* gray-50 */
+    
+    /* Backgrounds */
+    --color-indigo-50: #1e1b4b; /* 950 */
+    --color-indigo-100: #312e81; /* 900 */
+    --color-blue-50: #172554; /* 950 */
+    --color-blue-100: #1e3a8a; /* 900 */
+    --color-emerald-50: #022c22; /* 950 */
+    --color-emerald-100: #064e3b; /* 900 */
+    --color-red-50: #450a0a; /* 950 */
+    --color-red-100: #7f1d1d; /* 900 */
+
+    /* Text Colors */
+    --color-indigo-900: #e0e7ff; /* 100 */
+    --color-indigo-800: #c7d2fe; /* 200 */
+    --color-indigo-700: #a5b4fc; /* 300 */
+    --color-emerald-900: #d1fae5; /* 100 */
+    --color-emerald-800: #a7f3d0; /* 200 */
+    --color-emerald-700: #6ee7b7; /* 300 */
+    --color-blue-800: #bfdbfe; /* 200 */
+    --color-blue-700: #93c5fd; /* 300 */
+    --color-red-600: #fca5a5; /* 300 */
+  }
+}
+
 @layer utilities {
   .checkerboard {
     background-image: 
@@ -9,6 +52,14 @@
       linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
     background-size: 20px 20px;
     background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
-    background-color: white;
+    background-color: #ffffff;
+  }
+  
+  .dark .text-white {
+    color: #ffffff !important;
+  }
+  
+  .canvas-bg-white {
+    background-color: #ffffff !important;
   }
 }
