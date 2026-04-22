@@ -348,6 +348,8 @@ export default function App() {
   const [customerPhone, setCustomerPhone] = useState('');
   const [orderName, setOrderName] = useState('');
   const [measurements, setMeasurements] = useState<any[]>([]);
+  const [logoWidth, setLogoWidth] = useState<number>(9);
+  const [logoHeight, setLogoHeight] = useState<number>(9);
   const [logoQuantity, setLogoQuantity] = useState<number>(1);
   const [largePrintWidth, setLargePrintWidth] = useState<number>(28);
   const [largePrintHeight, setLargePrintHeight] = useState<number>(40);
@@ -740,10 +742,11 @@ export default function App() {
     const sourceImg = images.find(img => img.id === selectedIds[0]);
     if (!sourceImg) return;
 
-    const targetSizePx = 9 * CM_TO_PX;
+    const targetWidthPx = logoWidth * CM_TO_PX;
+    const targetHeightPx = logoHeight * CM_TO_PX;
     const spacingPx = 1 * CM_TO_PX;
 
-    const imgScale = Math.min(targetSizePx / sourceImg.width, targetSizePx / sourceImg.height);
+    const imgScale = Math.min(targetWidthPx / sourceImg.width, targetHeightPx / sourceImg.height);
     const newWidth = sourceImg.width * imgScale;
     const newHeight = sourceImg.height * imgScale;
 
@@ -1038,13 +1041,16 @@ export default function App() {
                 <div key={gabId} className="flex items-center">
                   <button
                     onClick={() => setActiveGabaritoId(gabId)}
-                    className={`px-3 py-1.5 text-sm font-medium rounded-l-md border ${
+                    className={`px-3 py-1.5 text-sm font-medium rounded-l-md border flex items-center gap-1.5 ${
                       activeGabaritoId === gabId
                         ? 'bg-indigo-600 text-white border-indigo-600'
                         : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
                     }`}
                   >
-                    {index + 1}
+                    <span>{index + 1}</span>
+                    <span className={`text-[10px] ${activeGabaritoId === gabId ? 'text-indigo-200' : 'text-gray-400'}`}>
+                      ({images.filter(img => img.gabaritoId === gabId).length})
+                    </span>
                   </button>
                   {gabaritos.length > 1 && (
                     <button
@@ -1147,17 +1153,17 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Logo Peito (9x9) */}
+                {/* Logo Peito */}
                 <div className="flex items-center gap-2 border-r border-gray-200 pr-6 shrink-0">
-                  <span className="text-xs font-semibold text-indigo-900 uppercase">Logo Peito (9x9)</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={logoQuantity}
-                    onChange={(e) => setLogoQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-12 px-1.5 py-1 text-xs border border-indigo-200 rounded focus:ring-1 focus:ring-indigo-500 outline-none"
-                    title="Quantidade"
-                  />
+                  <span className="text-xs font-semibold text-indigo-900 uppercase">Logo Peito</span>
+                  <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded px-1 py-1">
+                    <span className="text-[10px] text-gray-500 ml-1">L:</span>
+                    <input type="number" min="1" value={logoWidth} onChange={(e) => setLogoWidth(Math.max(1, parseInt(e.target.value) || 1))} className="w-9 px-1 py-0.5 text-[10px] text-center border border-indigo-200 bg-white rounded focus:ring-1 focus:ring-indigo-500 outline-none" title="Largura (cm)" />
+                    <span className="text-[10px] text-gray-500">A:</span>
+                    <input type="number" min="1" value={logoHeight} onChange={(e) => setLogoHeight(Math.max(1, parseInt(e.target.value) || 1))} className="w-9 px-1 py-0.5 text-[10px] text-center border border-indigo-200 bg-white rounded focus:ring-1 focus:ring-indigo-500 outline-none" title="Altura (cm)" />
+                    <span className="text-[10px] text-gray-500 ml-1">Qtd:</span>
+                    <input type="number" min="1" value={logoQuantity} onChange={(e) => setLogoQuantity(Math.max(1, parseInt(e.target.value) || 1))} className="w-9 px-1 py-0.5 text-[10px] text-center border border-indigo-200 bg-white rounded focus:ring-1 focus:ring-indigo-500 outline-none" title="Quantidade" />
+                  </div>
                   <button
                     onClick={applyLogoPeito}
                     className="bg-indigo-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-indigo-700 transition-colors shadow-sm"
@@ -1214,7 +1220,12 @@ export default function App() {
               return (
                 <div key={gabId} className="flex flex-col items-center">
                   <div className="mb-2 flex items-center justify-between w-full px-2">
-                    <h3 className="text-lg font-bold text-gray-700">Gabarito {index + 1}</h3>
+                    <h3 className="text-lg font-bold text-gray-700">
+                      Gabarito {index + 1}
+                      <span className="text-sm font-normal text-gray-500 ml-2">
+                        ({gabaritoImages.length} {gabaritoImages.length === 1 ? 'imagem' : 'imagens'})
+                      </span>
+                    </h3>
                     {activeGabaritoId === gabId && (
                       <span className="text-xs font-medium bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">
                         Ativo
